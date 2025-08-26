@@ -1,15 +1,15 @@
 """Streamlined Neo-Taker Model with TransformerLens compatibility."""
 
 from typing import List, Optional, Union
+import warnings
 import torch
 import torch.nn as nn
 from torch import Tensor
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel, AutoConfig
 
 from .data_classes import DtypeMap
 from .hooks import HookedRootModule, HookPoint
-from .model_maps import ConfigClass, ModelMap, convert_hf_model_config
-
+from .component_maps import MapConfigClass, ModelMap, convert_hf_model_config
 
 class Model(HookedRootModule):
     """Neo-Taker model with TransformerLens-style hooks."""
@@ -37,7 +37,8 @@ class Model(HookedRootModule):
         self.dtype_args = self.dtype_map._dtype_args
         
         # Model components
-        self.cfg: ConfigClass = None
+        self.hf_config: AutoConfig = None
+        self.cfg: MapConfigClass = None
         self.tokenizer: AutoTokenizer = None
         self.predictor: AutoModelForCausalLM = None
         self.model: PreTrainedModel = None
@@ -58,7 +59,7 @@ class Model(HookedRootModule):
     def _init_model(self):
         """Initialize the model components."""
         # Load configuration
-        self.cfg = convert_hf_model_config(self.model_repo)
+        self.cfg, self.hf_config = convert_hf_model_config(self.model_repo)
         
         # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -196,18 +197,25 @@ class Model(HookedRootModule):
         
         # Hook residual stream at layer level
         hf_layer.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_resid_pre"))
-        hf_layer.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.hook_resid_post"))
+        def resid_post_hook(module, inp, out):
+            hp = getattr(self, f"blocks.{layer_idx}.hook_resid_post")
+            if isinstance(out, tuple) and len(out) > 0:
+                t0 = hp(out[0])
+                return (t0,) + out[1:]
+            return hp(out)
+        hf_layer.register_forward_hook(resid_post_hook)
         self._wired_hook_names.add(f"blocks.{layer_idx}.hook_resid_pre")
         self._wired_hook_names.add(f"blocks.{layer_idx}.hook_resid_post")
         
         # Try to hook attention and MLP components if they exist
         try:
-            # Hook attention components
-            if hasattr(hf_layer, 'self_attn'):
-                attn = hf_layer.self_attn
-                
+            # Hook attention components (support both LLaMA `self_attn` and GPT-2 `attn`)
+            if hasattr(hf_layer, 'self_attn') or hasattr(hf_layer, 'attn'):
+                attn = hf_layer.self_attn if hasattr(hf_layer, 'self_attn') else hf_layer.attn
+
                 # Hook attention input
                 attn.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_attn_in"))
+
                 # For attn_out, the module often returns a tuple; pass only tensor[0] to TL hook
                 def attn_out_hook(module, inp, out):
                     hp = getattr(self, f"blocks.{layer_idx}.hook_attn_out")
@@ -218,63 +226,155 @@ class Model(HookedRootModule):
                 attn.register_forward_hook(attn_out_hook)
                 self._wired_hook_names.add(f"blocks.{layer_idx}.hook_attn_in")
                 self._wired_hook_names.add(f"blocks.{layer_idx}.hook_attn_out")
-                
-                # Hook Q, K, V projections using model mapping
-                try:
-                    if "q_proj" in layer.key_map:
-                        q_proj = layer["q_proj"]
-                        q_proj.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_q_input"))
-                        q_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.attn.hook_q"))
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.hook_q_input")
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_q")
-                    
-                    if "k_proj" in layer.key_map:
-                        k_proj = layer["k_proj"]
-                        k_proj.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_k_input"))
-                        k_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.attn.hook_k"))
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.hook_k_input")
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_k")
-                    
-                    if "v_proj" in layer.key_map:
-                        v_proj = layer["v_proj"]
-                        v_proj.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_v_input"))
-                        v_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.attn.hook_v"))
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.hook_v_input")
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_v")
-                except Exception:
-                    # Fall back to direct HF naming
-                    if hasattr(attn, 'q_proj'):
-                        attn.q_proj.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_q_input"))
-                        attn.q_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.attn.hook_q"))
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.hook_q_input")
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_q")
-                    
-                    if hasattr(attn, 'k_proj'):
-                        attn.k_proj.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_k_input"))
-                        attn.k_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.attn.hook_k"))
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.hook_k_input")
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_k")
-                    
-                    if hasattr(attn, 'v_proj'):
-                        attn.v_proj.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_v_input"))
-                        attn.v_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.attn.hook_v"))
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.hook_v_input")
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_v")
 
-                try:
-                    if "o_proj" in layer.key_map:
-                        out_proj = layer["o_proj"]
-                        out_proj.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.attn.hook_z"))
-                        out_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.hook_attn_out"))
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_z")
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.hook_attn_out")
-                except Exception:
-                    # Fall back to direct HF naming
-                    if hasattr(attn, 'out_proj'):
-                        attn.out_proj.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.attn.hook_z"))
-                        attn.out_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.hook_attn_out"))
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_z")
-                        self._wired_hook_names.add(f"blocks.{layer_idx}.hook_attn_out")
+                # Helper to compute head counts
+                def _num_heads(which: str) -> int:
+                    n_qo_heads = self.cfg.n_heads
+                    n_kv_heads = getattr(self.cfg, 'n_key_value_heads', None) or n_qo_heads
+                    return n_kv_heads if which in ('k', 'v') else n_qo_heads
+
+                d_head = self.cfg.d_head
+
+                # Custom forward hook for Q/K/V to expose [batch, seq, n_heads, d_head] to hooks
+                def _qkv_hook(which: str):
+                    def _hook(module, inp, out):
+                        hp = getattr(self, f"blocks.{layer_idx}.attn.hook_{which}")
+                        if not isinstance(out, torch.Tensor) or out.dim() != 3:
+                            return hp(out)
+                        B, S, D = out.shape
+                        # Heads per stream
+                        nH_qo = _num_heads('q')
+                        nH_kv = _num_heads('k')
+                        d_model_qo = nH_qo * d_head
+                        d_model_kv = nH_kv * d_head
+
+                        # Case 1: separate projection with expected dimension
+                        nH = _num_heads(which)
+                        expected = nH * d_head
+                        if D == expected:
+                            t = out.view(B, S, nH, d_head)
+                            t2 = hp(t)
+                            if t2 is None:
+                                t2 = t
+                            return t2.reshape(B, S, expected)
+
+                        # Case 2: combined QKV (e.g., GPT-2 c_attn): split, apply, and re-concat
+                        if D == (d_model_qo + d_model_kv + d_model_kv):
+                            q_end = d_model_qo
+                            k_end = q_end + d_model_kv
+                            q_seg = out[..., :q_end]
+                            k_seg = out[..., q_end:k_end]
+                            v_seg = out[..., k_end:]
+
+                            if which == 'q':
+                                t = q_seg.view(B, S, nH_qo, d_head)
+                                t2 = hp(t)
+                                if t2 is None:
+                                    t2 = t
+                                q_seg = t2.reshape(B, S, d_model_qo)
+                            elif which == 'k':
+                                t = k_seg.view(B, S, nH_kv, d_head)
+                                t2 = hp(t)
+                                if t2 is None:
+                                    t2 = t
+                                k_seg = t2.reshape(B, S, d_model_kv)
+                            elif which == 'v':
+                                t = v_seg.view(B, S, nH_kv, d_head)
+                                t2 = hp(t)
+                                if t2 is None:
+                                    t2 = t
+                                v_seg = t2.reshape(B, S, d_model_kv)
+                            return torch.cat([q_seg, k_seg, v_seg], dim=-1)
+
+                        # Fallback: warn and pass through hook without reshaping
+                        warnings.warn(
+                            f"Unexpected proj dim at layer {layer_idx} for {which}: {D}; cannot infer head split"
+                        )
+                        return hp(out)
+                    return _hook
+
+                # Hook Q, K, V projections using model mapping
+                mod_to_whiches = {}
+                proj_modules = {}
+                if "q_proj" in layer.key_map:
+                    proj_modules['q'] = layer["q_proj"]
+                    self._wired_hook_names.add(f"blocks.{layer_idx}.hook_q_input")
+                    self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_q")
+                if "k_proj" in layer.key_map:
+                    proj_modules['k'] = layer["k_proj"]
+                    self._wired_hook_names.add(f"blocks.{layer_idx}.hook_k_input")
+                    self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_k")
+                if "v_proj" in layer.key_map:
+                    proj_modules['v'] = layer["v_proj"]
+                    self._wired_hook_names.add(f"blocks.{layer_idx}.hook_v_input")
+                    self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_v")
+
+                # Group whiches by underlying module (to deduplicate pre-hooks for combined QKV)
+                for which, mod in proj_modules.items():
+                    mod_to_whiches.setdefault(id(mod), {"module": mod, "whiches": []})["whiches"].append(which)
+
+                # Register a single pre-hook per unique module that chains q/k/v input hooks
+                for entry in mod_to_whiches.values():
+                    mod = entry["module"]
+                    whiches = entry["whiches"]
+                    def _chained_prehook(module, input, whiches=whiches):
+                        hp_inputs = {
+                            'q': getattr(self, f"blocks.{layer_idx}.hook_q_input"),
+                            'k': getattr(self, f"blocks.{layer_idx}.hook_k_input"),
+                            'v': getattr(self, f"blocks.{layer_idx}.hook_v_input"),
+                        }
+                        if isinstance(input, tuple) and len(input) > 0:
+                            x = input[0]
+                            for w in whiches:
+                                x2 = hp_inputs[w](x)
+                                if x2 is not None:
+                                    x = x2
+                            return (x,) + input[1:]
+                        elif isinstance(input, Tensor):
+                            x = input
+                            for w in whiches:
+                                x2 = hp_inputs[w](x)
+                                if x2 is not None:
+                                    x = x2
+                            return x
+                        return input
+                    mod.register_forward_pre_hook(_chained_prehook)
+
+                # Register forward hooks (one per which) to expose per-head Q/K/V
+                for which, mod in proj_modules.items():
+                    mod.register_forward_hook(_qkv_hook(which))
+
+                # Custom pre-hook for Z to expose [batch, seq, n_heads, d_head] to hooks
+                def _z_prehook(module, input):
+                    hp = getattr(self, f"blocks.{layer_idx}.attn.hook_z")
+                    if not (isinstance(input, tuple) and len(input) > 0 and isinstance(input[0], torch.Tensor)):
+                        return input
+                    x = input[0]
+                    if x.dim() != 3:
+                        return input
+                    B, S, D = x.shape
+                    nH = _num_heads('q')  # z uses qo heads
+                    expected = nH * d_head
+                    if D != expected:
+                        warnings.warn(f"Unexpected z dim: {D} != n_heads({nH})*d_head({d_head}) at layer {layer_idx}")
+                        t2 = hp(x)
+                        return (t2,) + input[1:] if len(input) > 1 else (t2,)
+                    t = x.view(B, S, nH, d_head)
+                    t2 = hp(t)
+                    if t2 is None:
+                        t2 = t
+                    flat = t2.reshape(B, S, expected)
+                    if len(input) > 1:
+                        return (flat,) + input[1:]
+                    else:
+                        return (flat,)
+
+                if "o_proj" in layer.key_map:
+                    out_proj = layer["o_proj"]
+                    out_proj.register_forward_pre_hook(_z_prehook)
+                    out_proj.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.hook_attn_out"))
+                    self._wired_hook_names.add(f"blocks.{layer_idx}.attn.hook_z")
+                    self._wired_hook_names.add(f"blocks.{layer_idx}.hook_attn_out")
             
             # Hook MLP components
             if hasattr(hf_layer, 'mlp'):
@@ -282,8 +382,11 @@ class Model(HookedRootModule):
                 
                 # Hook MLP input/output
                 mlp.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_mlp_in"))
+                # Wire resid_mid at MLP input (residual after attention)
+                mlp.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.hook_resid_mid"))
                 mlp.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.hook_mlp_out"))
                 self._wired_hook_names.add(f"blocks.{layer_idx}.hook_mlp_in")
+                self._wired_hook_names.add(f"blocks.{layer_idx}.hook_resid_mid")
                 self._wired_hook_names.add(f"blocks.{layer_idx}.hook_mlp_out")
                 
                 # Hook MLP components
@@ -293,36 +396,19 @@ class Model(HookedRootModule):
                 self._wired_hook_names.add(f"blocks.{layer_idx}.mlp.hook_post")
             
             # Hook layer norms using model mapping
-            try:
-                # Use TransformerLens naming: ln1 and ln2
-                if "ln1" in layer.key_map:
-                    ln1 = layer["ln1"]
-                    ln1.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.ln1.hook_scale"))
-                    ln1.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.ln1.hook_normalized"))
-                    self._wired_hook_names.add(f"blocks.{layer_idx}.ln1.hook_scale")
-                    self._wired_hook_names.add(f"blocks.{layer_idx}.ln1.hook_normalized")
-                
-                if "ln2" in layer.key_map:
-                    ln2 = layer["ln2"]
-                    ln2.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.ln2.hook_scale"))
-                    ln2.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.ln2.hook_normalized"))
-                    self._wired_hook_names.add(f"blocks.{layer_idx}.ln2.hook_scale")
-                    self._wired_hook_names.add(f"blocks.{layer_idx}.ln2.hook_normalized")
-            except Exception:
-                # Fall back to direct HF naming if mapping fails
-                if hasattr(hf_layer, 'input_layernorm'):
-                    ln1 = hf_layer.input_layernorm
-                    ln1.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.ln1.hook_scale"))
-                    ln1.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.ln1.hook_normalized"))
-                    self._wired_hook_names.add(f"blocks.{layer_idx}.ln1.hook_scale")
-                    self._wired_hook_names.add(f"blocks.{layer_idx}.ln1.hook_normalized")
-                
-                if hasattr(hf_layer, 'post_attention_layernorm'):
-                    ln2 = hf_layer.post_attention_layernorm
-                    ln2.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.ln2.hook_scale"))
-                    ln2.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.ln2.hook_normalized"))
-                    self._wired_hook_names.add(f"blocks.{layer_idx}.ln2.hook_scale")
-                    self._wired_hook_names.add(f"blocks.{layer_idx}.ln2.hook_normalized")
+            # Use TransformerLens naming: ln1 and ln2 via map only
+            if "ln1" in layer.key_map:
+                ln1 = layer["ln1"]
+                ln1.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.ln1.hook_scale"))
+                ln1.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.ln1.hook_normalized"))
+                self._wired_hook_names.add(f"blocks.{layer_idx}.ln1.hook_scale")
+                self._wired_hook_names.add(f"blocks.{layer_idx}.ln1.hook_normalized")
+            if "ln2" in layer.key_map:
+                ln2 = layer["ln2"]
+                ln2.register_forward_pre_hook(self._create_pytorch_pre_hook(f"blocks.{layer_idx}.ln2.hook_scale"))
+                ln2.register_forward_hook(self._create_pytorch_hook(f"blocks.{layer_idx}.ln2.hook_normalized"))
+                self._wired_hook_names.add(f"blocks.{layer_idx}.ln2.hook_scale")
+                self._wired_hook_names.add(f"blocks.{layer_idx}.ln2.hook_normalized")
 
         except Exception as e:
             print(f"Warning: Could not register all hooks for layer {layer_idx}: {e}")
@@ -565,8 +651,13 @@ class Model(HookedRootModule):
         Raises an error if the input string does not correspond to a single token.
         """
         token = self.to_tokens(string, prepend_bos=False).squeeze()
-        assert not token.shape, f"Input string: {string} is not a single token!"
-        return token.item()
+        try: 
+            assert not token.shape, f"Input string: {string} is not a single token!"
+            return token.item()
+        except AssertionError:
+            print(f"WARNING: Input string: {string} is not a single token! Got {self.to_str_tokens(token)}")
+            token = token[-1]
+            return token.item()
 
     # Utility methods
     def to(self, device):

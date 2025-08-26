@@ -145,11 +145,26 @@ class HookedRootModule(torch.nn.Module):
 
     def _enable_hook(self, name: Union[str, Callable[[str], bool]], hook: Callable, dir: Literal["fwd", "bwd"]) -> None:
         if isinstance(name, str):
+            # Warn if user attaches a forward hook to a hook point that isn't wired into the model's forward pass
+            if dir == "fwd" and hasattr(self, "_wired_hook_names") and name not in getattr(self, "_wired_hook_names"):
+                warnings.warn(
+                    f"Hook point '{name}' is not wired into the forward pass; the hook may never be called.",
+                    stacklevel=2,
+                )
             self.check_and_add_hook(name, hook, dir=dir, is_permanent=False, level=self.context_level, prepend=False)
         else:
-            for hook_name in self.hook_dict:
-                if name(hook_name):
-                    self.check_and_add_hook(hook_name, hook, dir=dir, is_permanent=False, level=self.context_level, prepend=False)
+            selected_names = [hook_name for hook_name in self.hook_dict if name(hook_name)]
+            if dir == "fwd" and hasattr(self, "_wired_hook_names"):
+                _wired = getattr(self, "_wired_hook_names")
+                unwired = [hn for hn in selected_names if hn not in _wired]
+                if len(unwired) > 0:
+                    warnings.warn(
+                        "Some selected hook points are not wired into the forward pass and hooks may not run: "
+                        + ", ".join(unwired),
+                        stacklevel=2,
+                    )
+            for hook_name in selected_names:
+                self.check_and_add_hook(hook_name, hook, dir=dir, is_permanent=False, level=self.context_level, prepend=False)
 
     from contextlib import contextmanager
     @contextmanager
