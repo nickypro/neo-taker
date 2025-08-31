@@ -13,6 +13,7 @@ from .map_data_classes import MapConfigClass
 
 from .modelling_llama import LlamaModelMapData
 from .modelling_gpt2 import GPT2ModelMapData
+from .modelling_gemma3 import Gemma3ModelMapData
 
 def convert_hf_model_config(official_model_name: str):
     """
@@ -32,6 +33,8 @@ def convert_hf_model_config(official_model_name: str):
         cfg = LlamaModelMapData.config_map(hf_config)
     elif architecture == "GPT2LMHeadModel":
         cfg = GPT2ModelMapData.config_map(hf_config)
+    elif architecture == "Gemma3ForCausalLM":
+        cfg = Gemma3ModelMapData.config_map(hf_config)
     # elif architecture == "MistralForCausalLM":
     #     cfg_dict = MistralModelMapData.config_map(hf_config)
     else:
@@ -56,6 +59,8 @@ def get_model_key_map(config: MapConfigClass):
         return LlamaModelMapData.model_map_dict
     elif architecture == "GPT2LMHeadModel":
         return GPT2ModelMapData.model_map_dict
+    elif architecture == "Gemma3ForCausalLM":
+        return Gemma3ModelMapData.model_map_dict
     # if architecture == "MistralForCausalLM":
     #     return mistral_model_map
 
@@ -68,6 +73,8 @@ def get_layer_key_map(config: MapConfigClass):
         return LlamaModelMapData.layer_map_factory(config)
     elif architecture == "GPT2LMHeadModel":
         return GPT2ModelMapData.layer_map_factory(config)
+    elif architecture == "Gemma3ForCausalLM":
+        return Gemma3ModelMapData.layer_map_factory(config)
     # if architecture == "MistralForCausalLM":
     #     return build_mistral_layer_map(config)
 
