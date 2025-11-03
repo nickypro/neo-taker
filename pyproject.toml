@@ -1,7 +1,7 @@
 [project]
 name = "neo-taker"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.1.1"
+description = "New version of Taker (Transformer Activation taKER)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,3 +9,7 @@ dependencies = [
     "transformers>=4.55.2",
     "welford-torch>=0.2.5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/nickypro/neo-taker"
+Repository = "https://github.com/nickypro/neo-taker"

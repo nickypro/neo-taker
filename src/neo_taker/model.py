@@ -18,7 +18,7 @@ class Model(HookedRootModule):
         self,
         model_repo: str = "nickypro/tinyllama-15m",
         model_device: str = None,
-        dtype: str = "bfp16",
+        dtype: str = "bf16",
         tokenizer_repo: str = None,
         eval_mode: bool = True,
         model_kwargs: dict = None,
@@ -55,6 +55,16 @@ class Model(HookedRootModule):
         
         if self.eval_mode and self.predictor:
             self.predictor.eval()
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        """Create a Model instance from a pretrained model. 
+        Added for compatibility with TransformerLens syntax.
+        Use normal model init syntax for type hints: 
+        - Model(model_repo="nickypro/tinyllama-15m", model_device="cpu")
+        - Model.from_pretrained("nickypro/tinyllama-15m", model_device="cpu")
+        """
+        return cls(*args, **kwargs)
     
     def _init_model(self):
         """Initialize the model components."""
