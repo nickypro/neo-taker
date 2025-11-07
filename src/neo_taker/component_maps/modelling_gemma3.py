@@ -198,6 +198,7 @@ def build_gemma3_layer_map(cfg: MapConfigClass):
 #####################################################################################
 
 Gemma3ModelMapData = ModelMapData(
+    architecture_name="Gemma3ForConditionalGeneration",
     config_map=convert_hf_gemma3_config,
     model_map_dict=gemma3_model_map,
     layer_map_factory=build_gemma3_layer_map,

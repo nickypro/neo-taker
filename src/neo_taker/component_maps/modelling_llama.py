@@ -188,6 +188,7 @@ def build_llama_layer_map(cfg: MapConfigClass):
 #####################################################################################
 
 LlamaModelMapData = ModelMapData(
+    architecture_name="LLaMAForCausalLM",
     config_map=convert_hf_llama_config,
     model_map_dict=llama_model_map,
     layer_map_factory=build_llama_layer_map,

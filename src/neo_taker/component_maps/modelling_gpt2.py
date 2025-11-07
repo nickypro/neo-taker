@@ -209,6 +209,7 @@ def build_gpt2_layer_map(cfg: MapConfigClass):
 #####################################################################################
 
 GPT2ModelMapData = ModelMapData(
+    architecture_name="GPT2LMHeadModel",
     config_map=convert_hf_gpt2_config,
     model_map_dict=gpt2_model_map,
     layer_map_factory=build_gpt2_layer_map,
