@@ -8,13 +8,13 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 import torch
 from neo_taker import Model
 
-def test_user_example():
+def test_user_example(model_repo: str = "nickypro/tinyllama-15m"):
     """Test the exact example from the user requirements."""
     print("Testing the exact user example...")
     
     # Create model
     model = Model(
-        model_repo="nickypro/tinyllama-15m",
+        model_repo=model_repo,
         model_device="cpu"
     )
     
@@ -57,5 +57,8 @@ def test_user_example():
     print(f"\n🎉 All tests passed! neo_taker now supports TransformerLens-style hooks!")
 
 if __name__ == "__main__":
-    test_user_example()
+    model_repo = "nickypro/tinyllama-15m"
+    if len(sys.argv) > 1:
+        model_repo = sys.argv[1]
+    test_user_example(model_repo)
 
