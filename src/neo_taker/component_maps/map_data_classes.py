@@ -43,6 +43,7 @@ class MapConfigClass:
 
 @dataclass
 class ModelMapData:
+    architecture_name: str
     config_map: Callable[[Any], MapConfigClass]
     model_map_dict: Dict[str, str]
     layer_map_factory: Callable
