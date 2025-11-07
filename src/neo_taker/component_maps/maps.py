@@ -14,6 +14,7 @@ from .map_data_classes import MapConfigClass
 from .modelling_llama import LlamaModelMapData
 from .modelling_gpt2 import GPT2ModelMapData
 from .modelling_gemma3 import Gemma3ModelMapData
+from .modelling_gemma3_textonly import Gemma3TextOnlyModelMapData
 
 def convert_hf_model_config(official_model_name: str):
     """
@@ -29,16 +30,22 @@ def convert_hf_model_config(official_model_name: str):
     hf_config = AutoConfig.from_pretrained(official_model_name)
     architecture = hf_config.architectures[0]
 
-    if architecture == "LlamaForCausalLM":
-        cfg = LlamaModelMapData.config_map(hf_config)
-    elif architecture == "GPT2LMHeadModel":
-        cfg = GPT2ModelMapData.config_map(hf_config)
-    elif architecture == "Gemma3ForCausalLM":
-        cfg = Gemma3ModelMapData.config_map(hf_config)
-    # elif architecture == "MistralForCausalLM":
-    #     cfg_dict = MistralModelMapData.config_map(hf_config)
-    else:
-        raise NotImplementedError(f"{architecture} is not currently supported.")
+    try:
+        if architecture == LlamaModelMapData.architecture_name:
+            cfg = LlamaModelMapData.config_map(hf_config)
+        elif architecture == GPT2ModelMapData.architecture_name:
+            cfg = GPT2ModelMapData.config_map(hf_config)
+        elif architecture == Gemma3ModelMapData.architecture_name:
+            cfg = Gemma3ModelMapData.config_map(hf_config)
+        elif architecture == Gemma3TextOnlyModelMapData.architecture_name:
+            cfg = Gemma3TextOnlyModelMapData.config_map(hf_config)
+        # elif architecture == "MistralForCausalLM":
+        #     cfg_dict = MistralModelMapData.config_map(hf_config)
+        else:
+            raise NotImplementedError(f"{architecture} is not currently supported.")
+    except:
+        print(f"{hf_config=}")
+        raise ValueError(f"Error converting model config for model {official_model_name}")
     
     # All of these models use LayerNorm
     cfg.architecture = architecture
@@ -55,12 +62,14 @@ def convert_hf_model_config(official_model_name: str):
 
 def get_model_key_map(config: MapConfigClass):
     architecture = config.architecture
-    if architecture in ["LLaMAForCausalLM", "LlamaForCausalLM"]:
+    if architecture == LlamaModelMapData.architecture_name:
         return LlamaModelMapData.model_map_dict
-    elif architecture == "GPT2LMHeadModel":
+    elif architecture == GPT2ModelMapData.architecture_name:
         return GPT2ModelMapData.model_map_dict
-    elif architecture == "Gemma3ForCausalLM":
+    elif architecture == Gemma3ModelMapData.architecture_name:
         return Gemma3ModelMapData.model_map_dict
+    elif architecture == Gemma3TextOnlyModelMapData.architecture_name:
+        return Gemma3TextOnlyModelMapData.model_map_dict
     # if architecture == "MistralForCausalLM":
     #     return mistral_model_map
 
@@ -69,12 +78,14 @@ def get_model_key_map(config: MapConfigClass):
 def get_layer_key_map(config: MapConfigClass):
     architecture = config.architecture
 
-    if architecture in ["LLaMAForCausalLM", "LlamaForCausalLM"]:
+    if architecture == LlamaModelMapData.architecture_name:
         return LlamaModelMapData.layer_map_factory(config)
-    elif architecture == "GPT2LMHeadModel":
+    elif architecture == GPT2ModelMapData.architecture_name:
         return GPT2ModelMapData.layer_map_factory(config)
-    elif architecture == "Gemma3ForCausalLM":
+    elif architecture == Gemma3ModelMapData.architecture_name:
         return Gemma3ModelMapData.layer_map_factory(config)
+    elif architecture == Gemma3TextOnlyModelMapData.architecture_name:
+        return Gemma3TextOnlyModelMapData.layer_map_factory(config)
     # if architecture == "MistralForCausalLM":
     #     return build_mistral_layer_map(config)
 

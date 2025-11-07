@@ -5,10 +5,9 @@ from typing import Optional, Any
 from .map_data_classes import ModelMapData, MapConfigClass
 from .map_utils import generate_sizes_dict, generate_attn_qkv_functions, update_param, get_attrs
 
-GEMMA3_ARCHITECTURE_NAME = "Gemma3ForConditionalGeneration"
+GEMMA3_ARCHITECTURE_NAME = "Gemma3ForCausalLM"
 
-def convert_hf_gemma3_config(hf_config: AutoConfig):
-    hf_config = hf_config.text_config
+def convert_hf_gemma3_textonly_config(hf_config: AutoConfig):
 
     # Some fields may differ across HF releases; use getattr with sane fallbacks
     act_fn = getattr(hf_config, "hidden_activation", getattr(hf_config, "hidden_act", None))
@@ -55,13 +54,13 @@ def convert_hf_gemma3_config(hf_config: AutoConfig):
 ######################
 
 gemma3_model_map = {
-    "model": "model.language_model",
-    "layers": "model.language_model.layers",
-    "embed": "model.language_model.embed_tokens",
-    "embed.W_E": "model.language_model.embed_tokens.weight",
+    "model": "model",
+    "layers": "model.layers",
+    "embed": "model.embed_tokens",
+    "embed.W_E": "model.embed_tokens.weight",
     # Positional embeddings handled by rotary in attention
-    "ln_final": "model.language_model.norm",
-    "ln_final.w": "model.language_model.norm.weight",
+    "ln_final": "model.norm",
+    "ln_final.w": "model.norm.weight",
     "unembed": "lm_head",
     "unembed.W_U": "lm_head.weight.T",  # Linear, bias=False
     "unembed.b_U": None,
@@ -200,9 +199,9 @@ def build_gemma3_layer_map(cfg: MapConfigClass):
 # Final Return
 #####################################################################################
 
-Gemma3ModelMapData = ModelMapData(
-    architecture_name="Gemma3ForConditionalGeneration",
-    config_map=convert_hf_gemma3_config,
+Gemma3TextOnlyModelMapData = ModelMapData(
+    architecture_name="Gemma3ForCausalLM",
+    config_map=convert_hf_gemma3_textonly_config,
     model_map_dict=gemma3_model_map,
     layer_map_factory=build_gemma3_layer_map,
 )
