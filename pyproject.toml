@@ -1,6 +1,6 @@
 [project]
 name = "neo-taker"
-version = "0.1.1"
+version = "0.1.2"
 description = "New version of Taker (Transformer Activation taKER)"
 readme = "README.md"
 requires-python = ">=3.10"
